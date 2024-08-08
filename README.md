@@ -65,12 +65,3 @@ kubectl annotate sa -n autoneg-system autoneg-controller-manager \
   iam.gke.io/gcp-service-account=autoneg-system@${PROJECT_ID}.iam.gserviceaccount.com
 k apply -f app/nginx.yaml
 ```
-
-## ArgoCD Connection
-
-```
-# Get IP address
-
-# Get pass
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-```
