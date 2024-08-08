@@ -1,0 +1,40 @@
+kind: Gateway
+apiVersion: gateway.networking.k8s.io/v1beta1
+metadata:
+  name: external-http
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      kinds:
+      - kind: HTTPRoute
+---
+kind: HTTPRoute
+apiVersion: gateway.networking.k8s.io/v1beta1
+metadata:
+  name: public-store-route
+  labels:
+    gateway: external-http
+spec:
+  hostnames:
+  - "store.example.com"
+  parentRefs:
+  - name: external-http
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - group: net.gke.io
+      kind: ServiceImport
+      name: nginx-service
+      port: 8080
+  - backendRefs:
+    - group: net.gke.io
+      kind: ServiceImport
+      name: nginx-service
+      port: 8080

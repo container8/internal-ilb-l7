@@ -1,0 +1,17 @@
+global:
+  domain: argocd.foo.xalt.team
+
+server:
+  service:
+    type: LoadBalancer
+    annotations:
+      cloud.google.com/load-balancer-type: "External"
+  ingress:
+    enabled: true
+    controller: "gke"
+    hosts:
+      - argocd.foo.xalt.team # replace with your actual domain
+    tls:
+      - secretName: foo-tls # name of the secret that contains the TLS certificate
+        hosts:
+          - argocd.foo.xalt.team
