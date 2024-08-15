@@ -40,6 +40,8 @@ gcloud services enable \
 ./scripts/terraform.sh plan
 ./scripts/terraform.sh apply
 # takes around 20 mins to deploy
+# The NEGs are created from inside GKE and not available as data sources on the first TF run
+# Clusters should be created separate from the load balancer configuration to enable stream lined disaster recovery
 ```
 
 ## Deploy Nginx Application
@@ -52,16 +54,88 @@ cd .. && git clone git@github.com:GoogleCloudPlatform/gke-autoneg-controller.git
 export PROJECT_ID=ilb-l7-gke-poc
 ../gke-autoneg-controller/deploy/workload_identity.sh
 
-gcloud container clusters get-credentials cluster-belgium --region us-east1
+# Optional AutoNEG Installation
 kubectl apply -f ../gke-autoneg-controller/deploy/autoneg.yaml
 kubectl annotate sa -n autoneg-system autoneg-controller-manager \
   iam.gke.io/gcp-service-account=autoneg-system@${PROJECT_ID}.iam.gserviceaccount.com
 k -n autoneg-system delete po <TAB>
-k apply -f app/nginx.yaml
 
+# Setup cluster contexts
 gcloud container clusters get-credentials cluster-germany --region us-central1
-kubectl apply -f ../gke-autoneg-controller/deploy/autoneg.yaml
-kubectl annotate sa -n autoneg-system autoneg-controller-manager \
-  iam.gke.io/gcp-service-account=autoneg-system@${PROJECT_ID}.iam.gserviceaccount.com
-k apply -f app/nginx.yaml
+gcloud container clusters get-credentials cluster-belgium --region us-east1
+
+# Edit .kube/config and rename contexts to germany/belgium
+kubectx belgium
+k apply -f app/nginx-belgium.yaml
+
+kubectx germany
+k apply -f app/nginx-germany.yaml
+
+# Check NEGs
+gcloud compute network-endpoint-groups list
+
+# Uncomment predefined NEGs / dynamic backends and run terraform apply
+./scripts/terraform.sh plan
+./scripts/terraform.sh apply
+
+# Get ILB IP Address
+gcloud compute forwarding-rules list --global # 10.128.0.100
+
+# Connect to the test VM
+gcloud compute ssh debian-vm --zone=us-central1-a
+
+# Test connection to ILB
+sudo apt-get update && sudo apt-get install netcat-openbsd
+nc -z -v 10.128.0.100 80
+Connection to 10.128.0.100 80 port [tcp/http] succeeded!
+
+# Add to /etc/hosts
+# 10.128.0.100 dev.example.com
+
+# Send request to the dev.example.com
+curl -s http://dev.example.com | grep -i server
+
+```
+
+Other commands:
+
+```
+gcloud compute networks subnets list
+
+# Delete URLMap / Forwarding rule
+gcloud compute forwarding-rules delete test
+gcloud compute target-http-proxies delete gil7-map-target-proxy
+gcloud compute url-maps delete gil7-map
+
+# Clean up NEGs
+gcloud compute network-endpoint-groups list
+gcloud compute network-endpoint-groups delete nginx-neg-germany --zone us-central1-a
+gcloud compute network-endpoint-groups delete nginx-neg-germany --zone us-central1-c
+gcloud compute network-endpoint-groups delete nginx-neg-germany --zone us-central1-f
+gcloud compute network-endpoint-groups delete nginx-neg-belgium --zone us-east1-b
+gcloud compute network-endpoint-groups delete nginx-neg-belgium --zone us-east1-c
+gcloud compute network-endpoint-groups delete nginx-neg-belgium --zone us-east1-d
+
+# Allow SSH to the VM
+gcloud compute instances describe debian-vm
+
+gcloud compute firewall-rules list
+gcloud compute firewall-rules create allow_ssh_germany \
+    --action=ALLOW \
+    --direction=INGRESS \
+    --network=gke-vpc \
+    --priority=1000 \
+    --rules=tcp:22 \
+    --source-ranges=0.0.0.0/0
+```
+
+# Notes
+
+* Autoneg controller is not strictly required in this setup, we can use the pre-defined names for NEGs as follows
+
+```
+# For Germany
+'{"exposed_ports": {"80":{"name": "nginx-neg-germany"}}}'
+# For Belgium
+'{"exposed_ports": {"80":{"name": "nginx-neg-belgium"}}}'
 ```

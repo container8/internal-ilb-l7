@@ -8,6 +8,18 @@ locals {
   belgium = "us-east1"
   belgium_zone_a = "us-east1-b"
   max_rate_per_endpoint = 100
+  belgium_zones = [
+    "us-east1-b",
+    "us-east1-c",
+    "us-east1-d"
+  ]
+  germany_zones = [
+    "us-central1-a",
+    "us-central1-b",
+    "us-central1-c"
+  ]
+  germany_neg_name = "nginx-neg-germany"
+  belgium_neg_name = "nginx-neg-belgium"
 }
 
 ################
@@ -39,8 +51,8 @@ resource "google_container_cluster" "gke_cluster_be" {
     workload_pool = "${data.google_project.project.project_id}.svc.id.goog"
   }
 
-  network    = google_compute_network.vpc_network.name
-  subnetwork = google_compute_subnetwork.subnetwork_belgium.name
+  network    = data.google_compute_network.default.self_link
+  subnetwork = google_compute_subnetwork.subnetwork_belgium.self_link
 
   master_authorized_networks_config {
     cidr_blocks {
@@ -87,8 +99,8 @@ resource "google_container_cluster" "gke_cluster_de" {
     workload_pool = "${data.google_project.project.project_id}.svc.id.goog"
   }
 
-  network    = google_compute_network.vpc_network.name
-  subnetwork = google_compute_subnetwork.subnetwork_germany.name
+  network    = data.google_compute_network.default.self_link
+  subnetwork = google_compute_subnetwork.subnetwork_germany.self_link
 
   master_authorized_networks_config {
     cidr_blocks {
@@ -152,38 +164,36 @@ resource "google_gke_hub_membership" "membership_be" {
 # Internal Network #
 ####################
 
-resource "google_compute_network" "vpc_network" {
-  name                    = var.vpc_name
-  auto_create_subnetworks = false
+data "google_compute_network" "default" {
+  name = "default"
+}
+
+data "google_compute_subnetwork" "default" {
+  name   = "default"
+  region = local.germany
 }
 
 resource "google_compute_subnetwork" "subnetwork_germany" {
   name          = "subnet-germany"
-  ip_cidr_range = "10.0.0.0/16"
-  network       = google_compute_network.vpc_network.name
+  ip_cidr_range = "10.100.0.0/16"
+  network       = data.google_compute_network.default.self_link
   region        = local.germany
 }
 
 resource "google_compute_subnetwork" "subnetwork_belgium" {
   name          = "subnet-belgium"
   ip_cidr_range = "10.1.0.0/16"
-  network       = google_compute_network.vpc_network.name
+  network       = data.google_compute_network.default.self_link
   region        = local.belgium
 }
 
 resource "google_compute_subnetwork" "subnetwork_vm_germany" {
   name          = "subnetwork-vm-de"
-  network       = google_compute_network.vpc_network.self_link
-  ip_cidr_range = "10.2.2.0/24"
+  network       = data.google_compute_network.default.self_link
+  ip_cidr_range = "10.2.0.0/24"
   region        = local.germany
 }
 
-resource "google_compute_subnetwork" "subnetwork_vm_belgium" {
-  name          = "subnetwork-vm-be"
-  network       = google_compute_network.vpc_network.self_link
-  ip_cidr_range = "10.2.3.0/24"
-  region        = local.germany
-}
 
 ###########
 # Test VM #
@@ -201,7 +211,7 @@ resource "google_compute_instance" "debian_vm" {
   }
 
   network_interface {
-    network    = google_compute_network.vpc_network.self_link
+    network    = data.google_compute_network.default.self_link
     subnetwork = google_compute_subnetwork.subnetwork_vm_germany.self_link
 
     access_config {
@@ -217,7 +227,7 @@ resource "google_compute_instance" "debian_vm" {
     scopes = ["https://www.googleapis.com/auth/cloud-platform"]
   }
 
-  tags = ["http-server"]
+  tags = ["allow-ssh"]
 }
 
 #################
@@ -230,28 +240,28 @@ resource "google_compute_instance" "debian_vm" {
 # A proxy-only subnet must provide 64 or more IP addresses (min /26, recommended /23)
 # Should be centrally managed for the network
 
-resource "google_compute_subnetwork" "proxy_subnet_germany" {
-  name          = "proxy-subnet-de"
-  purpose       = "GLOBAL_MANAGED_PROXY"
-  role          = "ACTIVE"
-  region        = local.germany
-  network       = google_compute_network.vpc_network.name
-  ip_cidr_range = "10.2.0.0/24"
-}
+# resource "google_compute_subnetwork" "proxy_subnet_germany" {
+#   name          = "proxy-subnet-de"
+#   purpose       = "GLOBAL_MANAGED_PROXY"
+#   role          = "ACTIVE"
+#   region        = local.germany
+#   network       = data.google_compute_network.default.self_link
+#   ip_cidr_range = "10.2.0.0/24"
+# }
 
 resource "google_compute_subnetwork" "proxy_subnet_belgium" {
   name          = "proxy-subnet-be"
   purpose       = "GLOBAL_MANAGED_PROXY"
   role          = "ACTIVE"
   region        = local.belgium
-  network       = google_compute_network.vpc_network.name
+  network       = data.google_compute_network.default.self_link
   ip_cidr_range = "10.2.1.0/24"
 }
 
 # Firewall
 resource "google_compute_firewall" "allow_health_check" {
   name          = "fw-allow-health-check"
-  network       = google_compute_network.vpc_network.name
+  network       = data.google_compute_network.default.self_link
   direction     = "INGRESS"
   target_tags   = ["allow-health-check"]
   source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
@@ -264,10 +274,10 @@ resource "google_compute_firewall" "allow_health_check" {
 
 resource "google_compute_firewall" "allow_ssh" {
   name        = "fw-allow-ssh"
-  network     = google_compute_network.vpc_network.name
+  network     = data.google_compute_network.default.self_link
   direction   = "INGRESS"
   target_tags = ["allow-ssh"]
-  source_ranges = ["0.0.0.0/22"]
+  source_ranges = ["0.0.0.0/0"]
 
   allow {
     protocol = "tcp"
@@ -277,7 +287,7 @@ resource "google_compute_firewall" "allow_ssh" {
 
 resource "google_compute_firewall" "allow_proxy_only_subnet" {
   name          = "fw-allow-proxy-only-subnet"
-  network       = google_compute_network.vpc_network.name
+  network       = data.google_compute_network.default.self_link
   direction     = "INGRESS"
   target_tags   = ["allow-proxy-only-subnet"]
   source_ranges = var.proxy_subnet_ranges
@@ -290,10 +300,23 @@ resource "google_compute_firewall" "allow_proxy_only_subnet" {
 
 resource "google_compute_firewall" "allow_gke_subnet" {
   name          = "fw-allow-gke-subnet"
-  network       = google_compute_network.vpc_network.name
+  network       = data.google_compute_network.default.self_link
   direction     = "INGRESS"
   target_tags   = ["allow-gke-subnet"]
   source_ranges = var.subnet_ranges
+
+  allow {
+    protocol = "tcp"
+    ports    = ["80"]
+  }
+}
+
+resource "google_compute_firewall" "allow_http_traffic" {
+  name          = "allow-http-traffic"
+  priority      = 500
+  network       = data.google_compute_network.default.self_link
+  direction     = "INGRESS"
+  source_ranges = ["0.0.0.0/0"]
 
   allow {
     protocol = "tcp"
@@ -305,10 +328,12 @@ resource "google_compute_firewall" "allow_gke_subnet" {
 # Premium Tier. If the IP address of the load balancer is in the Premium Tier, the traffic traverses Google's high‑quality global backbone with the intent that packets enter and exit a Google edge peering point as close as possible to the client. If you don't specify a network tier, your load balancer defaults to using the Premium Tier. Note that all internal load balancers are always Premium Tier. Additionally, the global external Application Load Balancer can also only be configured in Premium Tier.
 
 # Backend Service / Backend / NEGs
+# Using dynamic NEGs with autoneg-controller
 resource "google_compute_backend_service" "backend_service" {
   name                    = "backend-service"
   load_balancing_scheme   = "INTERNAL_MANAGED"
   locality_lb_policy      = "ROUND_ROBIN"
+  session_affinity        = "NONE"
   protocol                = "HTTP"
   enable_cdn              = false
   connection_draining_timeout_sec = 300
@@ -318,72 +343,79 @@ resource "google_compute_backend_service" "backend_service" {
     sample_rate = 1.0
   }
 
-  # backend {
-  #   group                   = google_compute_network_endpoint_group.neg_germany.id
-  #   balancing_mode          = "RATE"
-  #   max_rate_per_endpoint   = local.max_rate_per_endpoint
-  # }
-
-  # backend {
-  #   group                   = google_compute_network_endpoint_group.neg_belgium.id
-  #   balancing_mode          = "RATE"
-  #   max_rate_per_endpoint   = local.max_rate_per_endpoint
-  # }
-
+  # Ignore changes to the "tags" attribute
+  lifecycle {
+    ignore_changes = [
+      backend
+    ]
+  }
 }
 
-# resource "google_compute_network_endpoint_group" "neg_germany" {
-#   name                  = "neg-de"
-#   network_endpoint_type = "GCE_VM_IP_PORT"
-#   default_port          = 80
-#   zone                  = local.germany_zone_a
-#   network               = google_compute_network.vpc_network.name
-#   subnetwork            = google_compute_subnetwork.subnetwork_germany.id
-# }
+# Using predefined NEGs
+# These are not cleaned up automatically on GKE destroy
+data "google_compute_network_endpoint_group" "negs_germany" {
+  for_each = toset(local.germany_zones)
 
-# resource "google_compute_network_endpoint_group" "neg_belgium" {
-#   name                  = "neg-be"
-#   network_endpoint_type = "GCE_VM_IP_PORT"
-#   default_port          = 80
-#   zone                  = local.belgium_zone_a
-#   network               = google_compute_network.vpc_network.name
-#   subnetwork            = google_compute_subnetwork.subnetwork_belgium.id
-# }
-
-# URL Map
-resource "google_compute_url_map" "gil7_map" {
-  name            = "gil7-map"
-  default_service = google_compute_backend_service.backend_service.id
+  name = local.germany_neg_name
+  zone = each.value
 }
 
-resource "google_compute_target_http_proxy" "gil7_http_proxy" {
-  name    = "gil7-http-proxy"
-  url_map = google_compute_url_map.gil7_map.id
+data "google_compute_network_endpoint_group" "negs_belgium" {
+  for_each = toset(local.belgium_zones)
+
+  name = local.belgium_neg_name
+  zone = each.value
 }
 
-# resource "google_compute_global_forwarding_rule" "fw_rule_germany" {
-#   name                  = "l7-ilb-forwarding-rule-de"
-#   ip_protocol           = "TCP"
-#   load_balancing_scheme = "INTERNAL_MANAGED"
-#   port_range            = "80"
-#   target                = google_compute_target_http_proxy.gil7_http_proxy.id
-#   network               = google_compute_network.vpc_network.id
-#   subnetwork            = google_compute_subnetwork.subnetwork_germany.id
+resource "google_compute_backend_service" "backend_service_germany" {
+  name                    = "backend-service-germany"
+  load_balancing_scheme   = "INTERNAL_MANAGED"
+  locality_lb_policy      = "ROUND_ROBIN"
+  session_affinity        = "HTTP_COOKIE"
+  protocol                = "HTTP"
+  enable_cdn              = false
+  connection_draining_timeout_sec = 300
+  health_checks           = [google_compute_health_check.gil7_basic_check.id]
+  log_config {
+    enable      = true
+    sample_rate = 1.0
+  }
 
-#   depends_on            = [google_compute_subnetwork.proxy_subnet_germany]
-# }
+  dynamic "backend" {
+    for_each = data.google_compute_network_endpoint_group.negs_germany
 
-# resource "google_compute_global_forwarding_rule" "fw_rule_belgium" {
-#   name                  = "l7-ilb-forwarding-rule-be"
-#   ip_protocol           = "TCP"
-#   load_balancing_scheme = "INTERNAL_MANAGED"
-#   port_range            = "80"
-#   target                = google_compute_target_http_proxy.gil7_http_proxy.id
-#   network               = google_compute_network.vpc_network.id
-#   subnetwork            = google_compute_subnetwork.subnetwork_belgium.id
+    content {
+      group = backend.value.id
+      balancing_mode = "RATE"
+      max_rate = 60
+    }
+  }
+}
 
-#   depends_on            = [google_compute_subnetwork.proxy_subnet_belgium]
-# }
+resource "google_compute_backend_service" "backend_service_belgium" {
+  name                    = "backend-service-belgium"
+  load_balancing_scheme   = "INTERNAL_MANAGED"
+  locality_lb_policy      = "ROUND_ROBIN"
+  session_affinity        = "HTTP_COOKIE"
+  protocol                = "HTTP"
+  enable_cdn              = false
+  connection_draining_timeout_sec = 300
+  health_checks           = [google_compute_health_check.gil7_basic_check.id]
+  log_config {
+    enable      = true
+    sample_rate = 1.0
+  }
+
+  dynamic "backend" {
+    for_each = data.google_compute_network_endpoint_group.negs_belgium
+
+    content {
+      group = backend.value.id
+      balancing_mode = "RATE"
+      max_rate = 60
+    }
+  }
+}
 
 # Healthchecks
 
@@ -398,6 +430,86 @@ resource "google_compute_health_check" "gil7_basic_check" {
     port_specification = "USE_SERVING_PORT"
   }
 }
+
+# URL Map
+resource "google_compute_target_http_proxy" "gil7_http_proxy" {
+  name    = "gil7-http-proxy"
+  url_map = google_compute_url_map.http_urlmap.id
+}
+
+resource "google_compute_address" "internal_ip_germany" {
+  name         = "ilb-internal-ip"
+  subnetwork   = data.google_compute_subnetwork.default.id
+  address_type = "INTERNAL"
+  address      = "10.128.0.100" # 10.128.0.0/20
+  region       = local.germany
+}
+
+resource "google_compute_global_forwarding_rule" "fw_rule_germany" {
+  name                  = "l7-ilb-forwarding-rule"
+  ip_protocol           = "TCP"
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  port_range            = "80"
+  target                = google_compute_target_http_proxy.gil7_http_proxy.id
+  ip_address            = google_compute_address.internal_ip_germany.address
+}
+
+resource "google_compute_url_map" "http_urlmap" {
+  name    = "http-urlmap"
+  default_service = google_compute_backend_service.backend_service_germany.self_link
+
+  host_rule {
+    hosts        = ["dev.example.com"]  # Assuming a single host for simplicity
+    path_matcher = "allpaths"
+  }
+
+  path_matcher {
+    name            = "allpaths"
+    default_service = google_compute_backend_service.backend_service_germany.self_link
+
+    path_rule {
+      paths   = ["/*"]
+      service = google_compute_backend_service.backend_service_germany.self_link
+    }
+  }
+
+  # path_matcher {
+  #   name            = "header_based_routing"
+  #   default_service = google_compute_backend_service.backend_service_germany.self_link
+
+  #   # Path rule to match all paths
+  #   route_rules {
+  #     priority = 1
+  #     match_rules {
+  #       header_matches {
+  #         header_name = "X-Country"
+  #         exact_match = "Germany"
+  #         invert_match = true
+  #       }
+  #       ignore_case = true
+  #     }
+  #   }
+  #   path_rule {
+  #     paths = ["/*"]
+  #     service = google_compute_backend_service.backend_service_germany.self_link
+  #   }
+  # }
+}
+
+
+# resource "google_compute_global_forwarding_rule" "fw_rule_belgium" {
+#   name                  = "l7-ilb-forwarding-rule-be"
+#   ip_protocol           = "TCP"
+#   load_balancing_scheme = "INTERNAL_MANAGED"
+#   port_range            = "80"
+#   target                = google_compute_target_http_proxy.gil7_http_proxy.id
+#   network               = google_compute_network.vpc_network.id
+#   subnetwork            = google_compute_subnetwork.subnetwork_belgium.id
+
+#   depends_on            = [google_compute_subnetwork.proxy_subnet_belgium]
+# }
+
+
 
 ###########
 # Outputs #
