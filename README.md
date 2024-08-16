@@ -94,6 +94,14 @@ Connection to 10.128.0.100 80 port [tcp/http] succeeded!
 
 # Send request to the dev.example.com
 curl -s http://dev.example.com | grep -i server
+curl -s -H "X-Country: Germany" http://dev.example.com | grep -i server
+curl -s -H "X-Country: Belgium" http://dev.example.com | grep -i server
+
+# Scale deployment to 0 - emulate service failure
+kubectl scale --replicas=0 deployment/nginx-deployment
+
+curl -H "X-Country: Germany" http://dev.example.com
+# no healthy upstream
 
 ```
 
@@ -127,6 +135,15 @@ gcloud compute firewall-rules create allow_ssh_germany \
     --priority=1000 \
     --rules=tcp:22 \
     --source-ranges=0.0.0.0/0
+
+# Check health checks
+gcloud compute backend-services get-health backend-service-belgium --global
+gcloud compute backend-services get-health backend-service-germany --global
+gcloud compute backend-services get-health backend-service-europe --global
+
+# Try - Cross-region internal proxy Network Load Balancer
+# https://cloud.google.com/load-balancing/docs/tcp/internal-proxy
+
 ```
 
 # Notes

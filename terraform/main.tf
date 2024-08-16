@@ -417,13 +417,41 @@ resource "google_compute_backend_service" "backend_service_belgium" {
   }
 }
 
+resource "google_compute_backend_service" "backend_service_europe" {
+  name                    = "backend-service-europe"
+  load_balancing_scheme   = "INTERNAL_MANAGED"
+  locality_lb_policy      = "ROUND_ROBIN"
+  session_affinity        = "HTTP_COOKIE"
+  protocol                = "HTTP"
+  enable_cdn              = false
+  connection_draining_timeout_sec = 300
+  health_checks           = [google_compute_health_check.gil7_basic_check.id]
+  log_config {
+    enable      = true
+    sample_rate = 1.0
+  }
+
+  dynamic "backend" {
+    for_each = merge(
+      data.google_compute_network_endpoint_group.negs_belgium,
+      data.google_compute_network_endpoint_group.negs_germany
+    )
+
+    content {
+      group = backend.value.id
+      balancing_mode = "RATE"
+      max_rate = 60
+    }
+  }
+}
+
 # Healthchecks
 
 resource "google_compute_health_check" "gil7_basic_check" {
-  name              = "gil7-basic-check"
-  check_interval_sec = 5
-  timeout_sec        = 5
-  healthy_threshold  = 2
+  name                = "gil7-basic-check"
+  check_interval_sec  = 5
+  timeout_sec         = 5
+  healthy_threshold   = 2
   unhealthy_threshold = 2
 
   http_health_check {
@@ -454,9 +482,14 @@ resource "google_compute_global_forwarding_rule" "fw_rule_germany" {
   ip_address            = google_compute_address.internal_ip_germany.address
 }
 
+# Questions - what happens if?
+# What if load balancer fails - failover to regional load balancers is required?
+# https://medium.com/google-cloud/gcp-cross-region-internal-application-load-balancer-why-and-how-f3a33226d690
+# the header is not present?
+# One of the services does not have active NEGs? How to do failover?
 resource "google_compute_url_map" "http_urlmap" {
   name    = "http-urlmap"
-  default_service = google_compute_backend_service.backend_service_germany.self_link
+  default_service = google_compute_backend_service.backend_service_belgium.self_link
 
   host_rule {
     hosts        = ["dev.example.com"]  # Assuming a single host for simplicity
@@ -465,11 +498,47 @@ resource "google_compute_url_map" "http_urlmap" {
 
   path_matcher {
     name            = "allpaths"
-    default_service = google_compute_backend_service.backend_service_germany.self_link
-
-    path_rule {
-      paths   = ["/*"]
-      service = google_compute_backend_service.backend_service_germany.self_link
+    default_service = google_compute_backend_service.backend_service_europe.self_link
+    
+    # path_rule {
+    #   paths   = ["/*"]
+    #   route_action {
+    #     weighted_backend_services {
+    #       backend_service = google_compute_backend_service.backend_service_germany.self_link
+    #       weight = 50
+    #     }
+    #     weighted_backend_services {
+    #       backend_service = google_compute_backend_service.backend_service_belgium.self_link
+    #       weight = 50
+    #     }
+    #   }
+    # }
+    route_rules {
+      priority = 100
+      #service = google_compute_backend_service.backend_service_germany.self_link
+      #Failover by changing service backend to one containing endpoints from both regions
+      #Failover takes around 5-10 seconds
+      service = google_compute_backend_service.backend_service_europe.self_link
+      match_rules {
+        prefix_match = "/"
+        ignore_case = true
+        header_matches {
+          header_name = "X-Country"
+          exact_match = "Germany"
+        }
+      }
+    }
+    route_rules {
+      priority = 200
+      service = google_compute_backend_service.backend_service_belgium.self_link
+      match_rules {
+        ignore_case = true
+        prefix_match = "/"
+        header_matches {
+          header_name = "X-Country"
+          exact_match = "Belgium"
+        }
+      }
     }
   }
 
