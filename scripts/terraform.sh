@@ -19,7 +19,7 @@ export ENV_PATH=${SCRIPT_DIR}/../env
 
 terraform fmt -check -diff
 echo "Terraform key is set to: ${TERRAFORM_STATE_KEY}"
-terraform -chdir=${SCRIPT_DIR}/../terraform init -reconfigure -backend-config="prefix=${TERRAFORM_STATE_KEY}" -input=false
+terraform -chdir=${SCRIPT_DIR}/../terraform init -upgrade -reconfigure -backend-config="prefix=${TERRAFORM_STATE_KEY}" -input=false
 
 case ${command} in
     validate)

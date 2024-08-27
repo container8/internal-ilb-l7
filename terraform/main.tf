@@ -353,19 +353,19 @@ resource "google_compute_backend_service" "backend_service" {
 
 # Using predefined NEGs
 # These are not cleaned up automatically on GKE destroy
-data "google_compute_network_endpoint_group" "negs_germany" {
-  for_each = toset(local.germany_zones)
+# data "google_compute_network_endpoint_group" "negs_germany" {
+#   for_each = toset(local.germany_zones)
 
-  name = local.germany_neg_name
-  zone = each.value
-}
+#   name = local.germany_neg_name
+#   zone = each.value
+# }
 
-data "google_compute_network_endpoint_group" "negs_belgium" {
-  for_each = toset(local.belgium_zones)
+# data "google_compute_network_endpoint_group" "negs_belgium" {
+#   for_each = toset(local.belgium_zones)
 
-  name = local.belgium_neg_name
-  zone = each.value
-}
+#   name = local.belgium_neg_name
+#   zone = each.value
+# }
 
 resource "google_compute_backend_service" "backend_service_germany" {
   name                    = "backend-service-germany"
@@ -381,15 +381,15 @@ resource "google_compute_backend_service" "backend_service_germany" {
     sample_rate = 1.0
   }
 
-  dynamic "backend" {
-    for_each = data.google_compute_network_endpoint_group.negs_germany
+  # dynamic "backend" {
+  #   for_each = data.google_compute_network_endpoint_group.negs_germany
 
-    content {
-      group = backend.value.id
-      balancing_mode = "RATE"
-      max_rate = 60
-    }
-  }
+  #   content {
+  #     group = backend.value.id
+  #     balancing_mode = "RATE"
+  #     max_rate = 60
+  #   }
+  # }
 }
 
 resource "google_compute_backend_service" "backend_service_belgium" {
@@ -406,15 +406,15 @@ resource "google_compute_backend_service" "backend_service_belgium" {
     sample_rate = 1.0
   }
 
-  dynamic "backend" {
-    for_each = data.google_compute_network_endpoint_group.negs_belgium
+  # dynamic "backend" {
+  #   for_each = data.google_compute_network_endpoint_group.negs_belgium
 
-    content {
-      group = backend.value.id
-      balancing_mode = "RATE"
-      max_rate = 60
-    }
-  }
+  #   content {
+  #     group = backend.value.id
+  #     balancing_mode = "RATE"
+  #     max_rate = 60
+  #   }
+  # }
 }
 
 resource "google_compute_backend_service" "backend_service_europe" {
@@ -431,18 +431,18 @@ resource "google_compute_backend_service" "backend_service_europe" {
     sample_rate = 1.0
   }
 
-  dynamic "backend" {
-    for_each = merge(
-      data.google_compute_network_endpoint_group.negs_belgium,
-      data.google_compute_network_endpoint_group.negs_germany
-    )
+  # dynamic "backend" {
+  #   for_each = merge(
+  #     data.google_compute_network_endpoint_group.negs_belgium,
+  #     data.google_compute_network_endpoint_group.negs_germany
+  #   )
 
-    content {
-      group = backend.value.id
-      balancing_mode = "RATE"
-      max_rate = 60
-    }
-  }
+  #   content {
+  #     group = backend.value.id
+  #     balancing_mode = "RATE"
+  #     max_rate = 60
+  #   }
+  # }
 }
 
 # Healthchecks
@@ -465,21 +465,74 @@ resource "google_compute_target_http_proxy" "gil7_http_proxy" {
   url_map = google_compute_url_map.http_urlmap.id
 }
 
-resource "google_compute_address" "internal_ip_germany" {
-  name         = "ilb-internal-ip"
+# 'projects/ilb-l7-gke-poc/global/sslCertificates/global-certificate'. Compute SSL certificates are not supported with global INTERNAL_MANAGED load balancer., invalid
+data "google_compute_ssl_certificate" "global-ssl-certificate" {
+  name    = "global-certificate"
+}
+
+# Error: Error creating TargetHttpsProxy: googleapi: Error 400: Invalid value for field 'resource.sslCertificates[0]': 'projects/ilb-l7-gke-poc/global/sslCertificates/regional-certificate'. Compute SSL certificates are not supported with global INTERNAL_MANAGED load balancer., invalid
+data "google_compute_region_ssl_certificate" "regional-ssl-certificate" {
+  name    = "regional-certificate"
+
+  region = "us-central1"
+}
+
+# This works
+resource "google_certificate_manager_certificate" "cert-manager-certificate" {
+  name        = "cert-manager-certificate"
+  description = "Global cert"
+  scope       = "ALL_REGIONS"
+  self_managed {
+    pem_certificate = file("../ca-certs/server-cert.pem")
+    pem_private_key = file("../ca-certs/server-key.pem")
+  }
+}
+
+# Does global certificate works with INTERNAL_MANAGED global forwarding rule?
+resource "google_compute_target_https_proxy" "gil7_https_proxy" {
+  name    = "gil7-https-proxy"
+  url_map = google_compute_url_map.http_urlmap.id
+
+  certificate_manager_certificates = [google_certificate_manager_certificate.cert-manager-certificate.id] # Works
+  #ssl_certificates = [data.google_compute_ssl_certificate.global-ssl-certificate.self_link] # Error
+  #ssl_certificates = [data.google_compute_region_ssl_certificate.regional-ssl-certificate.self_link] # Error
+  #certificate_manager_certificates = [data.google_compute_ssl_certificate.global-ssl-certificate.self_link] # Error
+  #certificate_manager_certificates = [data.google_compute_region_ssl_certificate.regional-ssl-certificate.self_link] # Error
+  #ssl_policy       = google_compute_ssl_policy.ssl-policy.id
+}
+
+resource "google_compute_address" "internal_ip_germany_http" {
+  name         = "ilb-internal-ip-http"
   subnetwork   = data.google_compute_subnetwork.default.id
   address_type = "INTERNAL"
   address      = "10.128.0.100" # 10.128.0.0/20
   region       = local.germany
 }
 
-resource "google_compute_global_forwarding_rule" "fw_rule_germany" {
-  name                  = "l7-ilb-forwarding-rule"
+resource "google_compute_address" "internal_ip_germany_https" {
+  name         = "ilb-internal-ip-https"
+  subnetwork   = data.google_compute_subnetwork.default.id
+  address_type = "INTERNAL"
+  address      = "10.128.0.101" # 10.128.0.0/20
+  region       = local.germany
+}
+
+resource "google_compute_global_forwarding_rule" "fw_rule_germany_https" {
+  name                  = "l7-ilb-forwarding-rule-https"
+  ip_protocol           = "TCP"
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  port_range            = "443"
+  target                = google_compute_target_https_proxy.gil7_https_proxy.id
+  ip_address            = google_compute_address.internal_ip_germany_https.address
+}
+
+resource "google_compute_global_forwarding_rule" "fw_rule_germany_http" {
+  name                  = "l7-ilb-forwarding-rule-http"
   ip_protocol           = "TCP"
   load_balancing_scheme = "INTERNAL_MANAGED"
   port_range            = "80"
   target                = google_compute_target_http_proxy.gil7_http_proxy.id
-  ip_address            = google_compute_address.internal_ip_germany.address
+  ip_address            = google_compute_address.internal_ip_germany_http.address
 }
 
 # Questions - what happens if?

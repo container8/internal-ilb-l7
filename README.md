@@ -156,3 +156,56 @@ gcloud compute backend-services get-health backend-service-europe --global
 # For Belgium
 '{"exposed_ports": {"80":{"name": "nginx-neg-belgium"}}}'
 ```
+
+# Generate and Create Global Certificate
+
+```
+openssl genpkey -algorithm RSA -out ca-key.pem -aes256
+openssl req -x509 -new -nodes -key ca-key.pem -sha256 -days 3650 -out ca-cert.pem
+openssl genpkey -algorithm RSA -out server-key.pem
+openssl req -new -key server-key.pem -out server.csr
+cat <<EOF > san.cnf
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = req_ext
+prompt = no
+
+[req_distinguished_name]
+CN = dev.example.com  # Replace with your domain
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = dev.example.com  # Replace with your primary domain
+DNS.2 = example.com      # Additional domain (add more as needed)
+EOF
+
+openssl x509 -req -in server.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem -days 365 -sha256 -extfile san.cnf -extensions req_ext
+
+openssl x509 -in server-cert.pem -text
+
+# global compute SSL certificate
+# 'projects/ilb-l7-gke-poc/global/sslCertificates/global-certificate'. Compute SSL certificates are not supported with global INTERNAL_MANAGED load balancer., invalid
+gcloud compute ssl-certificates create global-certificate \
+    --certificate=server-cert.pem \
+    --private-key=server-key.pem \
+    --global
+
+# regional compute SSL certificate
+gcloud compute ssl-certificates create regional-certificate \
+    --certificate=server-cert.pem \
+    --private-key=server-key.pem \
+    --region=us-central1
+
+gcloud compute ssl-certificates list
+
+# certificate-manager SSL certificate
+gcloud certificate-manager certificates create cert-manager-certificate \
+   --certificate-file=server-cert.pem \
+   --private-key-file=server-key.pem \
+   --scope=all-regions
+
+gcloud certificate-manager certificates list
+
+```
