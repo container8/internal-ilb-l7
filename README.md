@@ -146,6 +146,63 @@ gcloud compute backend-services get-health backend-service-europe --global
 
 ```
 
+# TCP Traffic Path
+
+## Debugging
+
+```
+# Check backend service
+gcloud compute backend-services get-health backend-service-europe-tcp --global
+```
+
+Traffic paths:
+
+VM --> TCP LB --> Backend Service (Europe) --> NEGs with Pods (ok!)
+VM --> TCP LB --> Backend Service (Europe) --> Hybrid NEGs with Gateway IP Addresses (ok!)
+
+From VM:
+
+```
+# Connect to the test VM
+gcloud compute ssh debian-vm --zone=us-central1-a
+
+# Test connection to ILB
+sudo apt-get update && sudo apt-get install netcat-openbsd
+nc -z -v 10.128.0.103 80
+Connection to 10.128.0.103 80 port [tcp/https] succeeded!
+
+# Germany Gateway
+nc -z -v 10.100.0.10 80
+
+# Belgium Gateway
+nc -z -v 10.1.0.10 80
+
+# Add to /etc/hosts
+# 10.128.0.103 dev.example.com
+
+# Send request to the dev.example.com
+curl -s http://dev.example.com | grep -i server
+curl -s -H "X-Country: Germany" http://dev.example.com | grep -i server
+curl -s -H "X-Country: Belgium" http://dev.example.com | grep -i server
+```
+
+## Gateway API Deployment
+
+
+
+gcloud container clusters describe cluster-germany \
+  --location=us-central1 \
+  --format json
+
+gcloud container clusters describe cluster-belgium \
+  --location=us-east1 \
+  --format json
+
+## Questions
+
+* Can we point backend service to the IP address / gateway endpoint?
+
+
 # Notes
 
 * Autoneg controller is not strictly required in this setup, we can use the pre-defined names for NEGs as follows
@@ -197,6 +254,11 @@ gcloud compute ssl-certificates create regional-certificate \
     --certificate=server-cert.pem \
     --private-key=server-key.pem \
     --region=us-central1
+
+gcloud compute ssl-certificates create regional-certificate \
+    --certificate=server-cert.pem \
+    --private-key=server-key.pem \
+    --region=us-east1
 
 gcloud compute ssl-certificates list
 
